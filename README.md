@@ -1,5 +1,6 @@
-# AlloLib-kickstart
-Plug-n-Play Build Env for AlloLib Projects
+# Augraff: Audio Graffiti
+Augraff is an exploration of the concept of audio graffiti.
+Audio loops are "painted" onto the surface of an audiovisual environment with natural gesture. 
 
 ## Using
 1. Clone project and get [AlloLib's dependencies](https://github.com/AlloSphere-Research-Group/allolib/blob/main/readme.md)
