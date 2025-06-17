@@ -29,11 +29,46 @@
 
 #include "../gimmel/include/gimmel.hpp"
 
-void flushVoices(al::DistributedScene& scene) {
+void flushVoices(al::DistributedScene& scene, float springConstant, float simScale) {
   auto* voice = scene.getActiveVoices();
   while (voice) {
     auto* nextVoice = voice->next;
-    voice->free();
+    if (auto posVoice = dynamic_cast<al::PositionedVoice*>(voice)) {
+      // get position 
+      al::Vec3f pos = posVoice->pose().pos();
+      // float mag = pos.mag();
+
+      float dis = 0; // initialize dis
+      al::Vec3f direction = 0; // initialize direction
+      al::Vec3f totalForce = 0; // initialize totalForce
+      al::Vec3f acceleration = 0; // initialize acceleration
+
+      direction *= 0; // set direction to 0
+      direction += al::Vec3f(0, -simScale, 0); // direction = j particle 
+      direction -= pos; // direction -= current particle
+      dis = direction.mag(); // Euclidian distance between particles
+      direction.normalize(); // normalize to unit vector
+
+      if (dis < 0.1f) {
+        voice->free();
+      }
+
+      // wrap to sphere with springs
+      al::Vec3f force = direction; 
+      force *= springConstant; // scale by K
+      totalForce += force; // add to totalForce
+      acceleration = totalForce;
+
+      // update each velocity 
+      auto paramsVec = posVoice->parameters();
+      for (auto param : paramsVec) {
+        if (param->getName() == "velocity") {
+          if (auto* cast = dynamic_cast<al::ParameterVec3*>(param)) {
+            cast->set(cast->get() + acceleration);
+          }
+        }
+      }
+    }
     voice = nextVoice;
   }
 }
@@ -45,8 +80,8 @@ void wrapToSphere(al::DistributedScene& scene, float springConstant, float simSc
     voiceCounter++;
     auto* nextVoice = voice->next;
     if (auto posVoice = dynamic_cast<al::PositionedVoice*>(voice)) {
-      // float springConstant = 0.4f;
-      // float simScale = 15.f;
+
+      // get position 
       al::Vec3f pos = posVoice->pose().pos();
       float mag = pos.mag();
 
@@ -54,21 +89,18 @@ void wrapToSphere(al::DistributedScene& scene, float springConstant, float simSc
       float springForceMag = springConstant * (mag - simScale); // create sphere 
       al::Vec3f normalizedNegative = -pos / mag; // create sphere
       al::Vec3f acceleration = springForceMag * normalizedNegative; // create sphere
-
-      CONSOLE_OUT("Getting Velocity Param...");
+      
+      // update each velocity 
       auto paramsVec = posVoice->parameters();
       for (auto param : paramsVec) {
         if (param->getName() == "velocity") {
-          CONSOLE_OUT("Velocity Param Found!");
           if (auto* cast = dynamic_cast<al::ParameterVec3*>(param)) {
-            CONSOLE_OUT("Cast Successful!");
             cast->set(cast->get() + acceleration);
           }
         }
       }
-      voice = nextVoice;
     }
-    std::cout << "Found: " << voiceCounter << " voices." << std::endl;
+    voice = nextVoice; // next voice
   }
 }
 
@@ -149,8 +181,17 @@ public:
 
   void onCreate() override {}
 
+  bool shouldFlush = false;
   void onAnimate(double dt) override {
     wrapToSphere(mDistributedScene, springConstant, sphereRadius);
+
+    if (shouldFlush) {
+      if (!mDistributedScene.getActiveVoices()) {
+        shouldFlush = false;
+      }
+      flushVoices(mDistributedScene, springConstant, sphereRadius);
+    }
+
     mDistributedScene.update(dt);
   } 
   
@@ -180,7 +221,8 @@ public:
         mDistributedScene.triggerOn(freeVoice);
       }
       else if (k.key() == 'f') { // flush voices
-        flushVoices(mDistributedScene);
+        // flushVoices(mDistributedScene, springConstant, sphereRadius);
+        shouldFlush = true;
       }
     }
     return true;
