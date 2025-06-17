@@ -3,6 +3,8 @@
 // Single macro to switch between desktop and Allosphere configurations
 #define DESKTOP
 
+#define CONSOLE_OUT(x) std::cout << x << std::endl;
+
 #ifdef DESKTOP
   // Desktop configuration
   #define SAMPLE_RATE 48000
@@ -23,18 +25,64 @@
 #include "al/sound/al_Ambisonics.hpp"
 #include "al/sound/al_Dbap.hpp"
 #include "al/sphere/al_AlloSphereSpeakerLayout.hpp"
+#include "al/app/al_GUIDomain.hpp"
 
 #include "../gimmel/include/gimmel.hpp"
+
+void flushVoices(al::DistributedScene& scene) {
+  auto* voice = scene.getActiveVoices();
+  while (voice) {
+    auto* nextVoice = voice->next;
+    voice->free();
+    voice = nextVoice;
+  }
+}
+
+void wrapToSphere(al::DistributedScene& scene, float springConstant, float simScale) {
+  auto* voice = scene.getActiveVoices();
+  unsigned voiceCounter = 0;
+  while (voice) {
+    voiceCounter++;
+    auto* nextVoice = voice->next;
+    if (auto posVoice = dynamic_cast<al::PositionedVoice*>(voice)) {
+      // float springConstant = 0.4f;
+      // float simScale = 15.f;
+      al::Vec3f pos = posVoice->pose().pos();
+      float mag = pos.mag();
+
+      // wrap to sphere with springs
+      float springForceMag = springConstant * (mag - simScale); // create sphere 
+      al::Vec3f normalizedNegative = -pos / mag; // create sphere
+      al::Vec3f acceleration = springForceMag * normalizedNegative; // create sphere
+
+      CONSOLE_OUT("Getting Velocity Param...");
+      auto paramsVec = posVoice->parameters();
+      for (auto param : paramsVec) {
+        if (param->getName() == "velocity") {
+          CONSOLE_OUT("Velocity Param Found!");
+          if (auto* cast = dynamic_cast<al::ParameterVec3*>(param)) {
+            CONSOLE_OUT("Cast Successful!");
+            cast->set(cast->get() + acceleration);
+          }
+        }
+      }
+      voice = nextVoice;
+    }
+    std::cout << "Found: " << voiceCounter << " voices." << std::endl;
+  }
+}
 
 class SimpleVoice : public al::PositionedVoice {
 private:
   giml::SinOsc<float> mOsc{SAMPLE_RATE};
   al::Mesh mMesh;
+  al::ParameterVec3 mVelocity{"velocity", ""};
   bool timeToDie = false;
 
 public:
 
   void init() override {
+    this->registerParameter(mVelocity);
     mOsc.setFrequency(55.f * al::rnd::uniformi(1, 5)); // random octave of A
     al::addSphere(mMesh);
   }
@@ -49,7 +97,12 @@ public:
     }
   }
 
-  void update(double dt = 0) override {}
+  void update(double dt = 0) override {
+    // integrate velocity 
+    mPose = al::Pose(pose().pos() + mVelocity.get());
+    mVelocity = mVelocity.get() * 0.6f; // friction 
+  }
+
   void onProcess(al::Graphics& g) override {
     g.draw(mMesh);
   }
@@ -68,8 +121,15 @@ private:
   al::DistributedScene mDistributedScene;
   al::Pose mListenerPose{0.f};
 
+  al::Parameter sphereRadius{"sphereRadius", "", 15.f, 0.f, 30.f};
+  al::Parameter springConstant{"springConstant", "", 0.111f, 0.f, 1.f};
+
 public:
   void onInit() override {
+    auto GUIdomain = al::GUIDomain::enableGUI(defaultWindowDomain());
+    auto &gui = GUIdomain->newGUI();
+    gui.add(sphereRadius); // add parameter to GUI
+    gui.add(springConstant); // add parameter to GUI
 
     // prepare scene
     mDistributedScene.verbose(true);
@@ -88,9 +148,14 @@ public:
   }
 
   void onCreate() override {}
-  void onAnimate(double dt) override {} 
+
+  void onAnimate(double dt) override {
+    wrapToSphere(mDistributedScene, springConstant, sphereRadius);
+    mDistributedScene.update(dt);
+  } 
   
   void onDraw(al::Graphics& g) override {
+    g.lens().eyeSep(0); // disable stereo
     g.clear(0);
     mDistributedScene.render(g);
   }
@@ -104,17 +169,23 @@ public:
   void onMessage(al::osc::Message& m) override {}
 
   bool onKeyDown(const al::Keyboard& k) override {
-    if (isPrimary() && k.key() == ' ') { // Start a new voice on space bar
-      auto* freeVoice = mDistributedScene.getVoice<SimpleVoice>();
-      al::Pose pose;
-      pose.vec().x = al::rnd::uniform(2);
-      pose.vec().y = al::rnd::uniform(2);
-      pose.vec().z = -10.0 + al::rnd::uniform(6);
-      freeVoice->setPose(pose);
-      mDistributedScene.triggerOn(freeVoice);
+    if (isPrimary()) { 
+      if (k.key() == ' ') { // Start a new voice on space bar
+        auto* freeVoice = mDistributedScene.getVoice<SimpleVoice>();
+        al::Pose pose;
+        pose.vec().x = al::rnd::uniform(2);
+        pose.vec().y = al::rnd::uniform(2);
+        pose.vec().z = -10.0 + al::rnd::uniform(6);
+        freeVoice->setPose(pose);
+        mDistributedScene.triggerOn(freeVoice);
+      }
+      else if (k.key() == 'f') { // flush voices
+        flushVoices(mDistributedScene);
+      }
     }
     return true;
   }
+
 };
 
 int main() {
