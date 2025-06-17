@@ -71,13 +71,23 @@ public:
   void onTriggerOff() override {
     timeToDie = true;
   }
+
+  void velocity(al::Vec3f vel) {
+    mVelocity = vel;
+  }
+
+  al::Vec3f velocity() {
+    return mVelocity.get();
+  }
+
 };
 
 void flushVoices(al::DistributedScene& scene, float springConstant, float simScale) {
   auto* voice = scene.getActiveVoices();
   while (voice) {
     auto* nextVoice = voice->next;
-    if (auto posVoice = dynamic_cast<al::PositionedVoice*>(voice)) {
+    if (auto posVoice = dynamic_cast<SimpleVoice*>(voice)) { // cast to SimpleVoice
+
       // get position 
       al::Vec3f pos = posVoice->pose().pos();
 
@@ -101,14 +111,7 @@ void flushVoices(al::DistributedScene& scene, float springConstant, float simSca
       acceleration *= springConstant; // scale by K
 
       // update each velocity 
-      auto paramsVec = posVoice->parameters();
-      for (auto param : paramsVec) {
-        if (param->getName() == "velocity") {
-          if (auto* cast = dynamic_cast<al::ParameterVec3*>(param)) {
-            cast->set(cast->get() + acceleration);
-          }
-        }
-      }
+      posVoice->velocity(posVoice->velocity() + acceleration);
     }
     voice = nextVoice;
   }
@@ -120,7 +123,7 @@ void wrapToSphere(al::DistributedScene& scene, float springConstant, float simSc
   while (voice) {
     voiceCounter++;
     auto* nextVoice = voice->next;
-    if (auto posVoice = dynamic_cast<al::PositionedVoice*>(voice)) {
+    if (auto posVoice = dynamic_cast<SimpleVoice*>(voice)) { // cast to SimpleVoice
 
       // get position 
       al::Vec3f pos = posVoice->pose().pos();
@@ -132,14 +135,7 @@ void wrapToSphere(al::DistributedScene& scene, float springConstant, float simSc
       al::Vec3f acceleration = springForceMag * normalizedNegative; // create sphere
       
       // update each velocity 
-      auto paramsVec = posVoice->parameters();
-      for (auto param : paramsVec) {
-        if (param->getName() == "velocity") {
-          if (auto* cast = dynamic_cast<al::ParameterVec3*>(param)) {
-            cast->set(cast->get() + acceleration);
-          }
-        }
-      }
+      posVoice->velocity(posVoice->velocity() + acceleration);
     }
     voice = nextVoice; // next voice
   }
