@@ -1,5 +1,4 @@
-// Joel A. Jaffe 2025-06-13
-// Basic AlloApp demonstrating how to use the App class's callbacks
+// Joel A. Jaffe 2025-06-16
 
 // Single macro to switch between desktop and Allosphere configurations
 #define DESKTOP
@@ -18,52 +17,109 @@
   #define SPEAKER_LAYOUT al::AlloSphereSpeakerLayoutCompensated()
 #endif
 
-#include "al/app/al_App.hpp"
+#include "al/app/al_DistributedApp.hpp"
+#include "al/scene/al_DistributedScene.hpp"
+#include "al/math/al_Random.hpp"
+#include "al/sound/al_Ambisonics.hpp"
+#include "al/sound/al_Dbap.hpp"
+#include "al/sphere/al_AlloSphereSpeakerLayout.hpp"
 
-struct MyApp: public al::App {
+#include "../gimmel/include/gimmel.hpp"
 
-  float color = 0.0;
+class SimpleVoice : public al::PositionedVoice {
+private:
+  giml::SinOsc<float> mOsc{SAMPLE_RATE};
+  al::Mesh mMesh;
+  bool timeToDie = false;
 
-  void onInit() override { // Called on app start
-    std::cout << "onInit()" << std::endl;
+public:
+
+  void init() override {
+    mOsc.setFrequency(55.f * al::rnd::uniformi(1, 5)); // random octave of A
+    al::addSphere(mMesh);
   }
 
-  void onCreate() override { // Called when graphics context is available
-    std::cout << "onCreate()" << std::endl;
-  }
-
-  void onAnimate(double dt) override { // Called once before drawing
-    color += 0.01f;
-    if (color > 1.f) {
-      color -= 1.f;
+  void onProcess(al::AudioIOData& io) override {
+    for (auto sample = 0; sample < io.framesPerBuffer(); sample++) {
+      io.out(0, sample) = mOsc.processSample();
     }
-  } 
 
-  void onDraw(al::Graphics& g) override { // Draw function  
-    g.clear(color);  
-  }
-
-  void onSound(al::AudioIOData& io) override { // Audio callback  
-    while (io()) {    
-      io.out(0) = io.out(1) = 0.f;
+    if (timeToDie) {
+      this->free();
     }
   }
 
-  void onMessage(al::osc::Message& m) override { // OSC message callback  
-    m.print();  
+  void update(double dt = 0) override {}
+  void onProcess(al::Graphics& g) override {
+    g.draw(mMesh);
   }
+
+  void onTriggerOn() override {
+    timeToDie = false;
+  }
+
+  void onTriggerOff() override {
+    timeToDie = true;
+  }
+};
+
+class MyApp : public al::DistributedApp {
+private:
+  al::DistributedScene mDistributedScene;
+  al::Pose mListenerPose{0.f};
+
+public:
+  void onInit() override {
+
+    // prepare scene
+    mDistributedScene.verbose(true);
+    mDistributedScene.registerSynthClass<SimpleVoice>();
+    this->registerDynamicScene(mDistributedScene);
+    auto speakers = SPEAKER_LAYOUT; 
+    mDistributedScene.setSpatializer<SPATIALIZER_TYPE>(speakers);
+    mDistributedScene.distanceAttenuation().law(al::ATTEN_NONE);
+    mDistributedScene.prepare(audioIO());
+
+    // Set camera position and orientation
+    if (isPrimary()) {
+      nav().pos(al::Vec3d(35, 0.000000, 49));
+      nav().quat(al::Quatd(1.0, 0.000000, 0.325568, 0.000000));
+    }
+  }
+
+  void onCreate() override {}
+  void onAnimate(double dt) override {} 
+  
+  void onDraw(al::Graphics& g) override {
+    g.clear(0);
+    mDistributedScene.render(g);
+  }
+
+  void onSound(al::AudioIOData& io) override {
+    io.zeroOut(); // clear outputs... should be done?
+    mDistributedScene.listenerPose(mListenerPose); // seg faults
+    mDistributedScene.render(io);
+  }
+
+  void onMessage(al::osc::Message& m) override {}
 
   bool onKeyDown(const al::Keyboard& k) override {
-    if (k.key() == ' ') {
-      color = 0.f;
+    if (isPrimary() && k.key() == ' ') { // Start a new voice on space bar
+      auto* freeVoice = mDistributedScene.getVoice<SimpleVoice>();
+      al::Pose pose;
+      pose.vec().x = al::rnd::uniform(2);
+      pose.vec().y = al::rnd::uniform(2);
+      pose.vec().z = -10.0 + al::rnd::uniform(6);
+      freeVoice->setPose(pose);
+      mDistributedScene.triggerOn(freeVoice);
     }
+    return true;
   }
-
 };
 
 int main() {
   MyApp app;
-  app.title("Main");
+  app.title("Augraff");
   app.configureAudio(AUDIO_CONFIG);
   app.start();
   return 0;
