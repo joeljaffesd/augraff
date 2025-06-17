@@ -141,6 +141,10 @@ void wrapToSphere(al::DistributedScene& scene, float springConstant, float simSc
   }
 }
 
+al::Vec3f randomVec3f(float scale) { // <- Function that returns a Vec3f containing random coords
+  return al::Vec3f(al::rnd::uniformS(), al::rnd::uniformS(), al::rnd::uniformS()) * scale;
+} 
+
 class MyApp : public al::DistributedApp {
 private:
   al::DistributedScene mDistributedScene;
@@ -217,9 +221,7 @@ public:
       if (k.key() == ' ') { // Start a new voice on space bar
         auto* freeVoice = mDistributedScene.getVoice<SimpleVoice>();
         al::Pose pose;
-        pose.vec().x = al::rnd::uniform(2);
-        pose.vec().y = al::rnd::uniform(2);
-        pose.vec().z = -10.0 + al::rnd::uniform(6);
+        pose.vec() = randomVec3f(sphereRadius);
         freeVoice->setPose(pose);
         mDistributedScene.triggerOn(freeVoice);
       }
