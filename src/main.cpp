@@ -29,6 +29,50 @@
 
 #include "../gimmel/include/gimmel.hpp"
 
+class SimpleVoice : public al::PositionedVoice {
+private:
+  giml::SinOsc<float> mOsc{SAMPLE_RATE};
+  al::Mesh mMesh;
+  al::ParameterVec3 mVelocity{"velocity", ""};
+  bool timeToDie = false;
+
+public:
+
+  void init() override {
+    this->registerParameters(mPose, mVelocity);
+    mOsc.setFrequency(55.f * al::rnd::uniformi(1, 5)); // random octave of A
+    al::addSphere(mMesh);
+  }
+
+  void onProcess(al::AudioIOData& io) override {
+    for (auto sample = 0; sample < io.framesPerBuffer(); sample++) {
+      io.out(0, sample) = mOsc.processSample();
+    }
+
+    if (timeToDie) {
+      this->free();
+    }
+  }
+
+  void update(double dt = 0) override {
+    // integrate velocity 
+    mPose = al::Pose(pose().pos() + mVelocity.get());
+    mVelocity = mVelocity.get() * 0.6f; // friction 
+  }
+
+  void onProcess(al::Graphics& g) override {
+    g.draw(mMesh);
+  }
+
+  void onTriggerOn() override {
+    timeToDie = false;
+  }
+
+  void onTriggerOff() override {
+    timeToDie = true;
+  }
+};
+
 void flushVoices(al::DistributedScene& scene, float springConstant, float simScale) {
   auto* voice = scene.getActiveVoices();
   while (voice) {
@@ -36,11 +80,9 @@ void flushVoices(al::DistributedScene& scene, float springConstant, float simSca
     if (auto posVoice = dynamic_cast<al::PositionedVoice*>(voice)) {
       // get position 
       al::Vec3f pos = posVoice->pose().pos();
-      // float mag = pos.mag();
 
       float dis = 0; // initialize dis
       al::Vec3f direction = 0; // initialize direction
-      al::Vec3f totalForce = 0; // initialize totalForce
       al::Vec3f acceleration = 0; // initialize acceleration
 
       direction *= 0; // set direction to 0
@@ -49,15 +91,14 @@ void flushVoices(al::DistributedScene& scene, float springConstant, float simSca
       dis = direction.mag(); // Euclidian distance between particles
       direction.normalize(); // normalize to unit vector
 
+      // free if at bottom
       if (dis < 0.1f) {
         voice->free();
       }
 
-      // wrap to sphere with springs
-      al::Vec3f force = direction; 
-      force *= springConstant; // scale by K
-      totalForce += force; // add to totalForce
-      acceleration = totalForce;
+      // apply force
+      acceleration = direction; 
+      acceleration *= springConstant; // scale by K
 
       // update each velocity 
       auto paramsVec = posVoice->parameters();
@@ -104,50 +145,6 @@ void wrapToSphere(al::DistributedScene& scene, float springConstant, float simSc
   }
 }
 
-class SimpleVoice : public al::PositionedVoice {
-private:
-  giml::SinOsc<float> mOsc{SAMPLE_RATE};
-  al::Mesh mMesh;
-  al::ParameterVec3 mVelocity{"velocity", ""};
-  bool timeToDie = false;
-
-public:
-
-  void init() override {
-    this->registerParameter(mVelocity);
-    mOsc.setFrequency(55.f * al::rnd::uniformi(1, 5)); // random octave of A
-    al::addSphere(mMesh);
-  }
-
-  void onProcess(al::AudioIOData& io) override {
-    for (auto sample = 0; sample < io.framesPerBuffer(); sample++) {
-      io.out(0, sample) = mOsc.processSample();
-    }
-
-    if (timeToDie) {
-      this->free();
-    }
-  }
-
-  void update(double dt = 0) override {
-    // integrate velocity 
-    mPose = al::Pose(pose().pos() + mVelocity.get());
-    mVelocity = mVelocity.get() * 0.6f; // friction 
-  }
-
-  void onProcess(al::Graphics& g) override {
-    g.draw(mMesh);
-  }
-
-  void onTriggerOn() override {
-    timeToDie = false;
-  }
-
-  void onTriggerOff() override {
-    timeToDie = true;
-  }
-};
-
 class MyApp : public al::DistributedApp {
 private:
   al::DistributedScene mDistributedScene;
@@ -158,19 +155,25 @@ private:
 
 public:
   void onInit() override {
-    auto GUIdomain = al::GUIDomain::enableGUI(defaultWindowDomain());
-    auto &gui = GUIdomain->newGUI();
-    gui.add(sphereRadius); // add parameter to GUI
-    gui.add(springConstant); // add parameter to GUI
+    if (isPrimary()) {
+      auto GUIdomain = al::GUIDomain::enableGUI(defaultWindowDomain());
+      auto &gui = GUIdomain->newGUI();
+      gui.add(sphereRadius); // add parameter to GUI
+      gui.add(springConstant); // add parameter to GUI
+    }
 
     // prepare scene
     mDistributedScene.verbose(true);
     mDistributedScene.registerSynthClass<SimpleVoice>();
     this->registerDynamicScene(mDistributedScene);
-    auto speakers = SPEAKER_LAYOUT; 
-    mDistributedScene.setSpatializer<SPATIALIZER_TYPE>(speakers);
-    mDistributedScene.distanceAttenuation().law(al::ATTEN_NONE);
-    mDistributedScene.prepare(audioIO());
+
+
+    if (isPrimary()) {
+      auto speakers = SPEAKER_LAYOUT; 
+      mDistributedScene.setSpatializer<SPATIALIZER_TYPE>(speakers);
+      mDistributedScene.distanceAttenuation().law(al::ATTEN_NONE);
+      mDistributedScene.prepare(audioIO());
+    }
 
     // Set camera position and orientation
     if (isPrimary()) {
@@ -183,16 +186,18 @@ public:
 
   bool shouldFlush = false;
   void onAnimate(double dt) override {
-    wrapToSphere(mDistributedScene, springConstant, sphereRadius);
+    if (isPrimary()) {
+      wrapToSphere(mDistributedScene, springConstant, sphereRadius);
 
-    if (shouldFlush) {
-      if (!mDistributedScene.getActiveVoices()) {
-        shouldFlush = false;
+      if (shouldFlush) {
+        if (!mDistributedScene.getActiveVoices()) {
+          shouldFlush = false;
+        }
+        flushVoices(mDistributedScene, springConstant, sphereRadius);
       }
-      flushVoices(mDistributedScene, springConstant, sphereRadius);
-    }
 
-    mDistributedScene.update(dt);
+      mDistributedScene.update(dt);
+    }
   } 
   
   void onDraw(al::Graphics& g) override {
@@ -202,9 +207,11 @@ public:
   }
 
   void onSound(al::AudioIOData& io) override {
-    io.zeroOut(); // clear outputs... should be done?
-    mDistributedScene.listenerPose(mListenerPose); // seg faults
-    mDistributedScene.render(io);
+    if (isPrimary()) {
+      io.zeroOut(); // clear outputs... should be done?
+      mDistributedScene.listenerPose(mListenerPose); // seg faults
+      mDistributedScene.render(io);      
+    }
   }
 
   void onMessage(al::osc::Message& m) override {}
@@ -221,7 +228,6 @@ public:
         mDistributedScene.triggerOn(freeVoice);
       }
       else if (k.key() == 'f') { // flush voices
-        // flushVoices(mDistributedScene, springConstant, sphereRadius);
         shouldFlush = true;
       }
     }
